@@ -1,4 +1,4 @@
-FROM intersystems/iris:2019.4.0.383.0
+FROM intersystemsdc/iris-community
 
 USER root
 
