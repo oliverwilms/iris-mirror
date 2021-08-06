@@ -1,0 +1,519 @@
+ROUTINE ZSTU
+ZSTU
+	Try {
+		Set zstu = $Increment(^TESTzstu)
+		Set ^TESTzstu(zstu) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_"ZSTU"
+		Set tHost = $SYSTEM.INetInfo.LocalHostName()  // ip-10-123-45-67.us-gov-west-1.compute.internal
+		Set tRole = $SYSTEM.Util.GetEnviron("IRIS_MIRROR_ROLE")
+		Set ^TESTzstu(zstu) = ^TESTzstu(zstu)_" : "_tHost_" : "_tRole
+		Write $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : ZSTU LocalHostName = "_tHost,!
+		Write $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : ZSTU IRIS_MIRROR_ROLE = "_tRole,!
+		Do ##class(Security.Services).Get("%Service_Mirror", .svcProps)
+		Set msg = "Mirroring is "_$Select(svcProps("Enabled"):"",1:"not ")_"enabled."
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		;
+		If $zcvt(tRole,"U")="ARBITER" Quit
+		;
+		If (svcProps("Enabled") = 0) {
+			Set svcProps("Enabled") = 1
+			Do ##class(Security.Services).Modify("%Service_Mirror", .svcProps)
+		}
+		Set mgr = $zu(12)  // /failover2/iconfig/mgr/
+		Set mirrorfile = "/ICS/mirror/mirrorfile"
+		Set pBackup = "/ICS/backup"
+		Set pDatabase = "/failover1/irisdb/DMLSS_DB"
+		Set failover = $Piece(mgr,"/",2)  // or ##class(DataServer.Util).GetFailover()
+		Set $Piece(pDatabase,"/",2) = failover
+		Set pMirrorName = "IRISMIRROR"
+		Set sysname = $ZCONVERT(failover,"U")
+		Set mirror("UseSSL") = 0
+		Set mirror("ArbiterNode") = "" // "$1|2188"
+		//Set host = $zu(54,0)  // 66fe9ec3f1a0
+		//  host is same as tHost
+		//Write "host $zu(54,0) = ",host,!
+		Set hostIP = tHost
+		//Set hostIP = $$convHostToIP($zu(54,0))
+		Set mirror("ECPAddress") = hostIP
+		Set mirror("MirrorAddress") = hostIP
+		Set mirror("AgentAddress") = hostIP
+		Set rc = $$mirrorfilecheck(mirrorfile)
+		Set msg = "mirrorfile "_mirrorfile_" was "_$Select((rc=1):"",1:"not ")_"found."
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		If (rc = 0) {
+			// rm -rf $BACKUP_FOLDER/IRIS.DAT
+			Set rm = "rm -rf "_pBackup_"/IRIS.DAT"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = rm
+			Write rm,!
+			Set rc = $ZF(-1,rm)
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = rc
+			Write "rc = ",rc,!
+			Set msg = "Attempt CreateNewMirrorSet()"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set sc = ##class(SYS.Mirror).CreateNewMirrorSet(pMirrorName, sysname, .mirror)
+			Set msg = $System.Status.GetOneErrorText(sc)
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set sc = 1  // Continue if Mirror already defined
+			If sc {
+				Set sc = $$mirrorcreatorput(hostIP)
+				Hang 2
+				Set msg = "Attempt AddDatabase()"
+				Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+				Write msg,!
+				Set sc = ##class(SYS.Mirror).AddDatabase(pDatabase, "DMLSS_DB")
+				Set msg = $System.Status.GetOneErrorText(sc)
+				Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+				Write msg,!
+				Set msg = " --> makebackup" 
+				Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+				Write msg,!
+				Set sc = $$makebackup(pDatabase, pBackup)
+			}
+			Else {
+				// Problem
+				//Quit  ; failure
+			}
+		}
+		Set mirname = pMirrorName
+		Set mm = ##class(Config.MapMirrors).Open(mirname,sysname,,,.rc)
+		If '$IsObject(mm) {
+			Set msg = "Failed to open Config.MapMirrors("""_mirname_""","""_sysname_""") --> restorebackup" 
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set sc = $$restorebackup(pDatabase, pBackup)
+			Set msg = "Attempt JoinMirrorAsFailoverMember()"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set pMirrorAgent = $$mirrorcreatorget()
+			Set msg = "MirrorSetName = "_pMirrorName
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set msg = "SystemName = "_sysname
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set msg = "InstanceName = IRIS"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set msg = "AgentAddress = "_pMirrorAgent
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set pMirrorAgentPort = $$mirrorcreatorportget()
+			Set msg = "AgentPort = "_pMirrorAgentPort
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set sc = ##class(SYS.Mirror).JoinMirrorAsFailoverMember(pMirrorName, sysname, "IRIS", pMirrorAgent, pMirrorAgentPort)
+			Set msg = $System.Status.GetOneErrorText(sc)
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+		}
+		//
+		If $SYSTEM.Mirror.GetInfo()["NOTINIT"&&('##class(Config.MirrorMember).isAsyncMember()) {
+			Do NotMember^ZMIRRORHLPR()
+		}
+		//
+		Set mySFN = ""
+		Set objDatabase = ##class(SYS.Database).%OpenId(pDatabase)
+		If $IsObject(objDatabase),objDatabase.MirrorActivationRequired {
+			Set msg = "Attempt ActivateMirroredDatabase()"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set msg = "Directory = "_pDatabase
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set sc = ##class(SYS.Mirror).ActivateMirroredDatabase(pDatabase)
+			Set msg = $System.Status.GetOneErrorText(sc)
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+		//}  Get SFN when MirrorActivationRequired so we can also CatchupDB
+		If $IsObject(objDatabase) {
+			Do $SYSTEM.OBJ.Dump(objDatabase)
+			Set mySFN = objDatabase.SFN
+		} Else {
+			Set mySFN = $$getSFN(pDatabase)
+		}
+		}
+		If $IsObject(objDatabase),objDatabase.MirrorDBCatchup {
+			Do $SYSTEM.OBJ.Dump(objDatabase)
+			Set mySFN = objDatabase.SFN
+		}
+		If $IsObject(objDatabase) {
+			If (mySFN = "") Do $SYSTEM.OBJ.Dump(objDatabase)
+			//Set mySFN = objDatabase.SFN
+		}
+		If (mySFN '= "") {
+			Set msg = "mySFN = "_mySFN
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set DBList = $LB(mySFN)
+			Set msg = "Attempt CatchupDB()"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set msg = "DBList = "_DBList
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+			Set rc = ##class(SYS.Mirror).CatchupDB(DBList,,.DBErrList)
+			ZW DBErrList
+			Set msg = $Select((rc=0):"failed",1:"success")
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+		}
+		Set tData = $Data(^SYS("MIRRORSET",":LocalValidationFailure",pMirrorName))
+		Set msg = ":LocalValidationFailure "_$Select(tData:"",1:"not ")_"found."
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		Set rc = $$AddressUpdate^ZMIRRORHLPR()
+	}
+	Catch {
+		Quit
+	}
+	Quit
+	;
+GetNewNetworkAddresses(mirname,member,localsystem) {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Begin GetNewNetworkAddresses()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	s changed=0
+	s mm=##class(Config.MapMirrors).Open(mirname,member,,,.rc)
+	if '$IsObject(mm) {
+	    k err
+	    Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		Set msg = "Failed to open Config.MapMirrors("""_mirname_""","""_member_""") - Error = "_$G(err(1)) 
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		quit 0 ; failure
+	}
+    s def=mm.AgentAddress
+    s resp=$$getAddress("Agent Address",def)
+	if resp'=""&&(resp'=def) {
+ 	   s changed=1
+	   s mm.AgentAddress=resp
+	}
+	/*
+	s def=mm.AgentPort
+	w !,"Agent Port <"_def_"> " 
+	r resp
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.AgentPort=resp
+	}
+	*/
+	s def=mm.MirrorAddress
+    s resp=$$getAddress("Mirror Private Address",def)
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.MirrorAddress=resp
+	}
+	Set PortDisable=0,SSPortChanged=0
+	if $SYSTEM.Mirror.IsPrimary(),'localsystem {
+		Set clientcnt=$SYSTEM.Mirror.ClientQuery()
+		For id=1:1:clientcnt {
+			Set meminfo=$SYSTEM.Mirror.ClientQuery(id)
+			If +meminfo,$P(meminfo,",",2)=mm.Name,$P(meminfo,",",3)="Active"||($P(meminfo,",",3)="Catchup") {
+				Set PortDisable = 1
+				Quit
+			}
+		}
+	}
+	if PortDisable {
+		w !,"Editing SuperServer Port '",mm.MirrorSSPort,"' is not allowed because member"
+		w !,"  '",mm.Name,"' is currently connected to this primary member."
+	} else {
+		if localsystem {
+			/*
+			w !,"WARNING!!! This is for local member, changing SuperServer Port of the mirroring"
+			w !,"  also updating system's SuperServer Port."
+			*/
+			s startup=##class(Config.Startup).Open()
+			s def=startup.DefaultPort
+		} else {
+			s def=mm.MirrorSSPort
+		}
+		/*
+		w !,"SuperServer Port <"_def_"> " 
+		r resp
+		if resp'=""&&(resp'=def) {
+			s changed=1
+			s mm.MirrorSSPort=resp
+			if localsystem {
+				s startup.DefaultPort = resp
+				s SSPortChanged=1
+			}
+		}
+		*/
+	}
+	s def=mm.ECPAddress
+    s resp=$$getAddress("SuperServer Address",def)
+	if resp'=""&&(resp'=def) {
+		s changed=1
+		s mm.ECPAddress=resp
+	}
+	if 'changed quit 0  ;no changes
+	w !!,"New settings:"
+	w !,"Agent Address:  ",mm.AgentAddress,"|",mm.AgentPort
+    w !,"Mirror Private Address: ",mm.MirrorAddress,"|",mm.MirrorSSPort
+    w !,"SuperServer Address:    ",mm.ECPAddress,"|",mm.MirrorSSPort
+    set resp = "y"
+    /*
+    r !,"Save changes? ",resp
+    while "YyNn"'[$E(resp_"X") {
+	    w !,"Please enter yes or no"
+	    r !,"Save changes? ",resp
+    }
+    */
+    if "Yy"[$E(resp_"X") {
+	    s rc=mm.%Save()
+   	 	if (''rc) {
+		    w !,"Saved"
+		    s rc=1
+		    if SSPortChanged {
+				s rc=startup.%Save()
+				if 'rc {
+					w !,"Failed to save Config.Startup class, error=",$SYSTEM.Status.GetErrorText(rc)
+				}
+		    }
+   	 	} else {
+    	 	w !,"Failed to save changes"
+    	 	s rc=0
+   	 	}
+    } else {
+	    w !,"Changes discarded"
+	    s rc=0
+    }
+	s mm=""
+	quit rc
+}
+getAddress(prompt,default) {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Begin getAddress()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	; Ask the user to enter a network address and validate
+	; it and if it doesn't exist, ask them if they really want
+	; to use it.
+	;
+	; If a default is supplied then we accept <RET> (null) as an answer.
+	;
+	; Returns:
+	;      null - use the default
+	;      <all else> - answer
+	set resp = $P($zu(54,13,$zu(54,0)),",")
+	Set msg = "$P($zu(54,13,$zu(54,0)),"","") = "_resp
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	//quit resp
+	while (1) {
+	   //w !,prompt,"?"
+	   if default'="" {
+		   //w " <"_default_">"
+	   }
+	   //w " " 
+	   //r resp
+	   if default'="",resp="" {
+		   quit  ;exit while loop & return "" to use the default
+	   }
+	   s rc=##class(SYS.MirrorConfiguration).IsIPFormatValid(resp, .IPType, 0)
+		Set msg = "IsIPFormatValid() returned "_rc
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+	   if (''rc) {
+			Set msg = "IPType = "_IPType
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+		   if IPType="HOST" {
+			   set ipToUse=$$convHostToIP(resp)
+			   if (ipToUse="") {
+				   Set msg = "Error: Host "_resp_" does not resolve to IP address"
+					Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+					Write msg,!
+				   quit
+				   continue	
+			   }
+		   } else {
+			   set ipToUse=resp	
+		   }
+           if $System.INetInfo.CheckAddressExist(ipToUse) {
+	           quit  ;all is good, exit while loop
+           }
+			Set msg = $s(resp'=ipToUse:"Host '"_resp_"' translated ",1:"")_"IP address """_ipToUse_""" does not exist."
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+	       quit
+	   } else {
+			Set msg = "Address """_resp_""" is not valid"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+	   }
+	   quit
+	}
+	quit resp
+}
+convHostToIP(host) {
+	if $zcvt(host,"U")=$zcvt($zu(54,0),"U") s host="localhost"  ;force to localhost to get loopback address if the machine name is passed in
+	quit $s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.HostNameToAddr(host),1:$p($zu(54,13,host),","))	
+}
+getSFN(pDatabase) PUBLIC {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Begin getSFN("""_pDatabase_""")"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Try {
+		Set objDatabase = ##class(SYS.Database).%OpenId(pDatabase)
+		Set strSFN = objDatabase.SFN
+		Set objDatabase = ""
+	}
+	Catch {
+		Set msg = "Catch getSFN("""_pDatabase_""")"
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		Set msg = $ZU(49, pDatabase)
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		Set strSFN = +msg
+	}
+	Set msg = "getSFN("""_pDatabase_""") returns "_$Get(strSFN)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Quit $Get(strSFN)
+}
+makebackup(pDatabase,pBackup) PUBLIC {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Attempt DismountDatabase()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set sc = ##class(SYS.Database).DismountDatabase(pDatabase)
+	Set msg = $System.Status.GetOneErrorText(sc)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	If 'sc Quit sc
+	Set cp = "cp "_pDatabase_"/IRIS.DAT "_pBackup_"/IRIS.DAT"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = cp
+	Write cp,!
+	Set rc = $ZF(-1,cp)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = rc
+	Write "rc = ",rc,!
+	Set msg = "Attempt MountDatabase()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set sc = ##class(SYS.Database).MountDatabase(pDatabase)
+	Set msg = $System.Status.GetOneErrorText(sc)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Quit sc
+	/*
+iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(SYS.Database).DismountDatabase(\"${DATABASE}\")"
+# iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(Backup.General).ExternalFreeze()"
+md5sum ${DATABASE}/IRIS.DAT
+cp ${DATABASE}/IRIS.DAT ${BACKUP_FOLDER}/IRIS.DAT
+# iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(Backup.General).ExternalThaw()"
+iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(SYS.Database).MountDatabase(\"${DATABASE}\")"
+return 0
+ */
+}
+restorebackup(pDatabase,pBackup) {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Wait for "_pBackup_"/IRIS.DAT"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Hang 5
+	Set keepWaiting = (##class(%Library.File).Exists(pBackup_"/IRIS.DAT") = 0)
+	Set maxWait = 55  // Avoid endless loop
+	While keepWaiting {
+		Hang 1
+		Set maxWait = maxWait - 1
+		If (maxWait < 1) Set keepWaiting = 0
+		If ##class(%Library.File).Exists(pBackup_"/IRIS.DAT") Set keepWaiting = 0
+	}
+	Hang 2
+	Set msg = "Attempt DismountDatabase()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set sc = ##class(SYS.Database).DismountDatabase(pDatabase)
+	Set msg = $System.Status.GetOneErrorText(sc)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	If 'sc Quit sc
+	Set cp = "cp "_pBackup_"/IRIS.DAT "_pDatabase_"/IRIS.DAT"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = cp
+	Write cp,!
+	Set rc = $ZF(-1,cp)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = rc
+	Write "rc = ",rc,!
+	Set msg = "Attempt MountDatabase()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set sc = ##class(SYS.Database).MountDatabase(pDatabase)
+	Set msg = $System.Status.GetOneErrorText(sc)
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Quit sc
+	/*
+sleep 5
+while [ ! -f $BACKUP_FOLDER/IRIS.DAT ]; do sleep 1; done
+sleep 2
+iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(SYS.Database).DismountDatabase(\"${DATABASE}\")"
+cp $BACKUP_FOLDER/IRIS.DAT $DATABASE/IRIS.DAT
+md5sum $DATABASE/IRIS.DAT
+iris session $ISC_PACKAGE_INSTANCENAME -U %SYS "##class(SYS.Database).MountDatabase(\"${DATABASE}\")"
+*/
+}
+mirrorfilecheck(mirrorfile) PUBLIC {
+	; existence of mirrorfile indicates mirror has been created already
+	if ##class(%Library.File).Exists(mirrorfile) quit 1
+	set rc = $ZF(-1,"touch "_mirrorfile)
+	quit 0
+}
+mirrorcreatorput(host) PUBLIC {
+	set creatorfile = "/ICS/mirror/creator"
+	set timeout = 2
+	open creatorfile:("WNS"):timeout  // create new file or overwrite existing
+	use creatorfile
+	write $get(host),!
+	close creatorfile
+	quit 1
+}
+mirrorcreatorget() PUBLIC {
+	set creatorfile = "/ICS/mirror/primary"
+	set timeout = 300
+	open creatorfile:("R"):timeout  // read
+	if $test {
+		use creatorfile
+		read host
+		close creatorfile
+	}
+	quit $get(host)
+}
+mirrorcreatorportget() PUBLIC {
+	set creatorfile = "/ICS/mirror/creatorport"
+	set timeout = 2
+	open creatorfile:("R"):timeout  // read
+	if $test {
+		use creatorfile
+		read port
+		close creatorfile
+	}
+	quit $get(port,2188)
+}
+arbiterput(host) PUBLIC {
+	set arbiterfile = "/ICS/mirror/arbiter"
+	set timeout = 2
+	open arbiterfile:("WNS"):timeout  // create new file or overwrite existing
+	use arbiterfile
+	write $get(host),!
+	close arbiterfile
+	quit 1
+}
+arbiterget() PUBLIC {
+	set arbiterfile = "/ICS/mirror/arbiter"
+	set timeout = 2
+	open arbiterfile:("R"):timeout  // read
+	if $test {
+		use arbiterfile
+		read host
+		close arbiterfile
+	}
+	quit $get(host)
+}
