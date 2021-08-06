@@ -2,7 +2,7 @@ version: '3.7'
 
 services:
   arbiter:
-    image: intersystems/arbiter:2019.4.0.383.0
+    image: intersystemsdc/iris-community
     init: true
     command: 
       - /usr/local/etc/irissys/startISCAgent.sh 2188
