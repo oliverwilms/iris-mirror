@@ -24,7 +24,14 @@ XData MyInstall [ XMLNamespace = INSTALLER ]
 
     <Import File="${SOURCESPATH}" Recurse="1"/>
   </Namespace>
-
+  <Namespace Name="%SYS" Create="no">
+    <If Condition='(##class(%File).Exists("/opt/dataserver/src/DataServer")=1)'>
+      <Import File="/opt/dataserver/src/DataServer" Flags="ck" Recurse="1"/>
+    </If>
+    <Import File="/opt/dataserver/ZSTU.mac" Flags="ck" IgnoreErrors="0"/>
+    <Import File="/opt/dataserver/ZMIRRORHLPR.int" Flags="ck" IgnoreErrors="0"/>
+    <Import File="/opt/dataserver/ZMIRROR.int" Flags="ck" IgnoreErrors="0"/>
+  </Namespace>
 </Manifest>
 }
 
