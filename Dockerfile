@@ -1,4 +1,4 @@
-FROM intersystemsdc/iris-community
+FROM intersystems/irishealth:2020.1.0.215.0.20737
 
 USER root
 
