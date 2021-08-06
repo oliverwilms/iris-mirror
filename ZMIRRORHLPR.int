@@ -1,0 +1,1230 @@
+ROUTINE ZMIRRORHLPR
+ZMIRRORHLPR
+
+
+AddressUpdate(mirname,member,localsystem) PUBLIC {
+	//Set zstu = $Get(^TESTzstu)
+	//Set msg = "AddressUpdate ^ ZMIRRORHLPR"
+	//Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	//Write msg,!
+	do zstulog("AddressUpdate ^ ZMIRRORHLPR")
+	Set mirname = $Get(mirname,"IRISMIRROR")
+	If $SYSTEM.Mirror.IsPrimary() {
+		Set clientcnt=$SYSTEM.Mirror.ClientQuery()
+		For id=1:1:clientcnt {
+			Set meminfo=$SYSTEM.Mirror.ClientQuery(id)
+			ZW meminfo
+		}
+	}
+	Set member = "FAILOVER1"
+	Set rc = $$AddressUpdMem(mirname,member)
+	Set member = "FAILOVER2"
+	Set rc = $$AddressUpdMem(mirname,member)
+	Quit rc
+}
+AddressUpdMem(mirname,sysname) {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "AddressUpdMem ^ ZMIRRORHLPR"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set mm = ##class(Config.MapMirrors).Open(mirname,sysname,,,.rc)
+	If '$IsObject(mm) {
+		Kill err
+		Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+		Set msg = "Failed to open Config.MapMirrors("""_mirname_""","""_sysname_""") - Error = "_$G(err(1)) 
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+		Quit 0  ; failure
+	}
+	Set tHost = $$addrget(sysname)
+    Set def = mm.AgentAddress
+    If (def = tHost) { Quit 1 }
+    Set msg = "Found AgentAddress = "_def
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Begin GetNewNetworkAddresses()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	Set changed = 1
+	Set mm.AgentAddress = tHost
+	Set mm.MirrorAddress = tHost
+	Set mm.ECPAddress = tHost
+	if 'changed quit 0  ;no changes
+	w !!,"New settings:"
+	w !,"Agent Address:  ",mm.AgentAddress,"|",mm.AgentPort
+    w !,"Mirror Private Address: ",mm.MirrorAddress,"|",mm.MirrorSSPort
+    w !,"SuperServer Address:    ",mm.ECPAddress,"|",mm.MirrorSSPort
+    set resp = "y"
+    if "Yy"[$E(resp_"X") {
+	    s rc=mm.%Save()
+   	 	if (''rc) {
+		    //w !,"Saved"
+		    do zstulog("Saved")
+		    s rc=1
+   	 	} else {
+    	 	//w !,"Failed to save changes"
+		    do zstulog("Failed to save changes")
+    	 	s rc=0
+   	 	}
+    } else {
+	    w !,"Changes discarded"
+	    s rc=0
+    }
+	s mm=""
+	quit rc
+}
+getAddress(prompt,default) {
+	Set zstu = $Get(^TESTzstu)
+	Set msg = "Begin getAddress()"
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	; Ask the user to enter a network address and validate
+	; it and if it doesn't exist, ask them if they really want
+	; to use it.
+	;
+	; If a default is supplied then we accept <RET> (null) as an answer.
+	;
+	; Returns:
+	;      null - use the default
+	;      <all else> - answer
+	set resp = $P($zu(54,13,$zu(54,0)),",")
+	Set msg = "$P($zu(54,13,$zu(54,0)),"","") = "_resp
+	Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	Write msg,!
+	//quit resp
+	while (1) {
+	   //w !,prompt,"?"
+	   if default'="" {
+		   //w " <"_default_">"
+	   }
+	   //w " " 
+	   //r resp
+	   if default'="",resp="" {
+		   quit  ;exit while loop & return "" to use the default
+	   }
+	   s rc=##class(SYS.MirrorConfiguration).IsIPFormatValid(resp, .IPType, 0)
+		Set msg = "IsIPFormatValid() returned "_rc
+		Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+		Write msg,!
+	   if (''rc) {
+			Set msg = "IPType = "_IPType
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+		   if IPType="HOST" {
+			   set ipToUse=$$convHostToIP(resp)
+			   if (ipToUse="") {
+				   Set msg = "Error: Host "_resp_" does not resolve to IP address"
+					Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+					Write msg,!
+				   quit
+				   continue	
+			   }
+		   } else {
+			   set ipToUse=resp	
+		   }
+           if $System.INetInfo.CheckAddressExist(ipToUse) {
+	           quit  ;all is good, exit while loop
+           }
+			Set msg = $s(resp'=ipToUse:"Host '"_resp_"' translated ",1:"")_"IP address """_ipToUse_""" does not exist."
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+	       quit
+	   } else {
+			Set msg = "Address """_resp_""" is not valid"
+			Set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+			Write msg,!
+	   }
+	   quit
+	}
+	quit resp
+}
+addrget(member) {
+    Try {
+	    set flag = 0
+	    set host = ""
+    set path = $$mirrordirget()
+    set filename = $zcvt(member,"l")
+    set memberfile = path_filename
+	set timeout = 2
+	do zstulog("Attempt to open "_memberfile)
+	open memberfile:("R"):timeout  // read
+	if $test {
+		set flag = 1
+		do zstulog("flag = 1")
+	} else {
+		set memberfile = memberfile_".zmirrorhlpr"
+		do zstulog("Attempt to open "_memberfile)
+		open memberfile:("R"):timeout  // read
+		if $test {
+			set flag = 2
+			do zstulog("flag = 2")
+		}	
+	}
+	if flag {	
+		use memberfile
+		read host
+		close memberfile
+	}
+		if host?1"169.254.172.2 ".e set host=$Piece(host,"169.254.172.2 ",2)
+		if (flag = 1) set rc = $$fileRename(memberfile)
+	} Catch { }
+	do zstulog("host = "_$get(host))
+	quit $get(host)
+}
+fileRename(old,new) {
+	try {
+		if ($get(new) = "") set new = old_".zmirrorhlpr"
+		set rename = "mv -f "_old_" "_new
+		set rc = $ZF(-1,rename)
+	} catch { }
+	do zstulog("fileRename rc = "_$get(rc))
+	quit $get(rc)
+}
+mirrordirget() PUBLIC {
+	quit "/ICS/mirror/"
+}
+mirrorfilecheck(mirrorfile) PUBLIC {
+	; existence of mirrorfile indicates mirror has been created already
+	if ##class(%File).Exists(mirrorfile) quit 1
+	set rc = $ZF(-1,"touch "_mirrorfile)
+	quit 0
+}
+NotMember() PUBLIC {
+	// Get Primary
+	
+	// Get Creator
+	// Remove mirror configuration
+	Do RemoveMirrorConfig()
+	// Create a Mirror
+	Do SetupMirror(0)
+	Quit
+}
+RemoveMirrorConfig() {
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	if $SYSTEM.Mirror.GetInfo()["PRIMARY" {
+		w !!,"This is the active primary node so you can't remove"
+		w !,"the mirror configuration."
+		w !!,"You need to first clear JoinMirror in the CPF file"
+		w !,"or disable the %Service_Mirror service so that this node does not"
+		w !,"activate the configuration at startup and then restart the instance"
+		w !,"and then run this option again."  ;JO2395
+		s mm=##class(Config.MirrorMember).Open()
+		if mm.JoinMirror {
+			r !,"Do you want to Clear the JoinMirror flag? <No> ",resp
+			if "Yy"[$E(resp_"n") {
+				s mm.JoinMirror=0
+				s rc=mm.%Save()
+			}
+		} else {
+			w !!,"***The JoinMirror flag has been cleared. Restart InterSystems IRIS to"
+			w !,"continue removing this mirror member."
+		}
+		q
+	}
+	s mm=##class(Config.MirrorMember).Open()
+	if '$IsObject(mm)||(mm.SystemName="") {
+		w !,"Failed to open Config.MirrorMember - aborting"
+		quit
+	}
+	if $D(^SYS("MIRRORSET",":LocalValidationFailure")) {
+		w !,"This instance appears to be a clone of another mirror member."
+		s rc=$$DeleteLocalConfig()
+		quit
+	}
+	w !!,"This action will delete the mirror configuration information."
+	if $SYSTEM.Mirror.GetInfo()'["NOTINIT" {
+		w "The database instance needs to be restarted"
+	    w !,"to complete this operation."
+	}
+	s resp="Yy"
+	//r !,"Are you sure you want to do this? <N> ",resp
+	if "Nn"[$E(resp_"n") quit
+	;
+	w !!,"In addition to the above, do you also want to remove mirror attribute of"
+	w !,"mirrored databases (the databases themselves will not be deleted)? <No> "
+	s resp=""
+	//r resp
+	if "Yy"[$E(resp_"n") {
+		s deleteDBs=1
+		w !,"The mirrored databases' mirror attribute will be removed."
+	} else { 
+		s deleteDBs=0
+		w !,"The mirrored databases' mirror attribute will not be removed."
+	}
+	s deleteSSL=0
+	If ##class(Security.SSLConfigs).Exists("%MirrorClient",,.status) {
+		w !!,"In addition to the above, do you also want to remove"
+		w !,"   %MirrorClient/%MirrorServer SSL configuration? <No> "
+		//r resp
+		if "Yy"[$E(resp_"n") {
+			s deleteSSL=1
+			w !,"The %MirrorClient/%MirrorServer SSL configuration will be removed."
+		} else { 
+			w !,"The %MirrorClient/%MirrorServer SSL configuration will not be removed."
+		}
+	}
+	s rc=##class(SYS.MirrorConfiguration).RemoveMirrorConfiguration(deleteDBs,,deleteSSL)
+	;
+	if ('rc) {
+	   k err
+       Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+	   w !,"**** Failed to delete mirror configuration. Error ",err(1)
+	}
+    ;
+    w !,"Mirror configuration deleted."
+	if $SYSTEM.Mirror.GetInfo()'["NOTINIT" {
+	    w " You should shutdown and restart this system."
+	}
+    quit
+err ;
+	s $zt=""
+	w !,"Unexpected error removing node from the mirror: ",$ze
+	quit     
+}
+
+SetupMirror(Type) {
+	s $zt="err"
+	if ##class(EMS.Instance).IsManaged("Config.Mirrors") w !!,"Managed by Enterprise Manager, operation not allowed." Quit
+	i '$SYSTEM.Security.Check("%Admin_Manage","USE") w !,"Operation requires %Admin_Manage:Use privilege" q
+	; Mirroring requires the MirrorService, check that its
+	; enabled and offer to enable it if it isn't.
+	s x=##class(Security.Services).%OpenId($ZCVT("%Service_Mirror","L"),,.rc)
+ 	if ('rc) {
+	 	k err
+    	Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+    	w !,"Failed to check status of MirroringingService: ",err(1)
+    	Quit
+ 	} else {
+	 	if 'x.Enabled {
+		 	w !,"%Service_Mirror is required for Mirroring."
+		 	w !,"You have to enable %Service_Mirror in order to continue."
+		 	r !,"Do you want to enable it now? <Y> ",resp
+		 	if "Nn"'[$E(resp_"y") {
+			 	s x.Enabled=1
+			 	s rc=x.%Save()
+			 	if 'rc { w !,"Failed to enable Mirror Service" Quit}
+		 	} else {
+			 	w !,"Service not enabled." Quit
+			}
+		}
+ 	}
+ 	s x=""
+ 	if Type=3||(Type=4) goto retrieve
+ 	if Type=0||(Type=1) {
+	 	s rc=##class(SYS.Mirror).CheckISCAgent()
+	 	if '(''rc) {
+		 	w !,"ISCAgent check failed, error = ",$SYSTEM.Status.GetErrorText(rc)
+		 	quit
+	 	}
+	}
+GetMirrorName	;
+	s resp="IRISMIRROR"
+	//r !,"Mirror Set Name: ",resp
+	while ($L(resp)>15) || (resp'?1.(1A,1N)) {
+		w !,"Mirror Set Name is limited to ",15," alphanumeric characters."
+	    r !,"Mirror Set Name: ",resp
+	}
+	s mirname=$zcvt(resp,"U")
+	if mirname="" Quit
+	;
+	s mm=##class(Config.Mirrors).Open(mirname)
+	if $isobject(mm) s mm="" w !,"The Mirror Set name ",mirname," already existed." Quit  Goto GetMirrorName
+	;
+	Set sslc=##class(Security.SSLConfigs).%OpenId("%MirrorClient",,.status)
+	Set ssls=##class(Security.SSLConfigs).%OpenId("%MirrorServer",,.status)
+	s sslconfigured=$isobject(sslc)||$isobject(ssls)
+ 	if Type goto retrieve
+	; We're creating a new mirror, check whether we have ssl configs. If not
+	; remind the user that SSL is recommended and ask if they want to pause
+	; and go create them.
+	s JRNEncrypted=##class(%SYS.Journal.System).IsJournalEncryptionEnabled(3)
+	If JRNEncrypted {
+		w !!,"Journal encryption is enabled, UseSSL will be set automatically."
+		Set resp=1
+		Goto doSSL
+	}
+RetrySSL ;
+	if JRNEncrypted {
+		w !!,"SSL configuration failed. Abort!" Quit
+	}
+	w !,"The use of SSL for mirroring is strongly recommended due to the"
+	w !,"nature of what mirror members can ""do"" to each other."
+	w !,"This requires two SSL configurations on each failover mirror member:"
+	w !,"    SSL Client configuration: %MirrorClient"
+	w !,"    SSL Server configuration: %MirrorServer"
+	w !,"both configurations should use the same X.509 Credentials, they"
+	w !,"differ only in the client/server designation"
+	s resp="Nn"
+	//w !!,"Do you want to use SSL for the Mirror? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+doSSL ;
+	if resp {
+		if 'sslconfigured {
+			w !,"Mirror SSL is not set up, setting up the mirror SSL now."
+			if '$$SetupSSL() Goto RetrySSL
+		} else {
+			if $isobject(sslc)&&'sslc.Enabled s sslc.Enabled=1 s rc=sslc.%Save()
+			if $isobject(ssls)&&'ssls.Enabled s ssls.Enabled=1 s rc=ssls.%Save()
+			if '$isobject(sslc) w !,"%MirrorClient SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+			if '$isobject(ssls) w !,"%MirrorServer SSL configuration does not exist, could not use SSL for mirror." G RetrySSL
+        }
+	    s clientcn=$$GetSSLDNField^MIRRORCTL("client")
+	    if '$LG(clientcn) {
+		    w !,"Error getting SSL DN name in %MirrorClient: ",$LG(clientcn,2)
+		    goto RetrySSL
+	    }
+	    s servercn=$$GetSSLDNField^MIRRORCTL("server")
+	    if '$LG(servercn) {
+		    w !,"Error getting SSL DN name in %MirrorServer: ",$LG(servercn,2)
+		    goto RetrySSL
+	    }
+	    s clientcn=$LG(clientcn,2)
+	    s servercn=$LG(servercn,2)
+	    if servercn'=clientcn {
+		    w !,"SSL config error: Names in Server and client configurations are different"
+		    w !,"   server: ",servercn
+		    w !,"   client: ",client
+		    goto RetrySSL
+	    }
+	}
+	s MirrorInfo("UseSSL")=resp
+	s resp=""
+	//r !,"QOS Timeout (msec)? <8000> ",resp
+	if '+resp s resp=8000
+	s MirrorInfo("QOSTimeout")=resp
+	;
+	s arbiteraddr=""
+	s arbiterok=0
+	do {
+		//r !,"Address of the arbiter node? ",arbiteraddr
+		while (arbiteraddr'="") {
+			s rc=##class(Config.Mirrors).ValidateArbiterAddress(arbiteraddr)
+			q:(''rc)
+			w !,$SYSTEM.Status.GetErrorText(rc)
+			r !,"Enter an address for the arbiter: ",arbiteraddr
+		}	
+		if arbiteraddr="" {
+			w !,"The use of an arbiter node is strongly recommended."
+			s resp="Yy"
+			//r !,"Do you want to configure the mirror without an arbiter? <N> ",resp
+			if "Yy"[$E(resp_"X") s arbiterok=1
+		}
+	} while ((arbiteraddr="") && (arbiterok=0))
+	if (arbiteraddr '= "") {	
+		r !,"Arbiter port? <2188> ",arbiterport
+		if arbiterport="" s arbiterport=2188
+		s MirrorInfo("ArbiterNode")=arbiteraddr_"|"_arbiterport
+	} else {
+		s MirrorInfo("ArbiterNode")=""
+	}
+	while (1) {
+		s resp=""
+		//r !,"Mirror Virtual IP address: ",resp
+		if resp="" quit  ;If no VIP entered, quit. VIP is not required
+		s err="",type="",ipOut=""
+		s rc=##class(SYS.MirrorConfiguration).ValidateVirtualAddress(resp)
+		if 'rc {  ;Want IP only (for now). Will add FQDN later...
+			k err
+			Do DecomposeStatus^%apiOBJ(rc,.err,"-d") 
+			write !,$G(err(1))
+			continue	
+		}
+		w !,?5,"Checking if IP exists..."
+		if $System.INetInfo.CheckAddressExist($p(resp,"/")) {
+			write !,?5,"IP address already exists. Cannot use it for Virtual IP."
+			continue	
+		}
+		w " - IP does not exist. It can be used as Virtual IP address!"
+		quit  ;exit loop 
+	}	
+	s MirrorInfo("VirtualAddress")=resp  ;Null, or validated
+	if resp'="" {
+		s VIPInterface=$$getVirtualAddressInterface(resp)
+		if VIPInterface="" quit
+		s MirrorInfo("VirtualAddressInterface")=VIPInterface
+	}
+	/* SML1836, don't need this.
+	if MirrorInfo("UseSSL") {
+		r !,"Do you want to add names of authorized Async members? <N> ",resp
+		if "Yy"[$E(resp_"n") {
+#;SML1552
+			do ManageAuthorizedAsyncMembers(1)
+		}
+	}
+	*/
+	s resp=""
+	while (1) {
+		w !,"Enter compression mode for Failover members."
+		//r !,"0 -> System Selected, 1 -> Uncompressed, 2 -> Compressed <0>? ",resp
+		if resp="" s resp=0 quit
+		if resp>=0,resp<=2 quit
+		w "   please enter 0, 1 or 2."
+	}
+	s MirrorInfo("CompressionForFailoverMembers")=+resp
+	if +resp=2 {
+		while (1) {
+			w !,"Enter compression type."
+			r !,"0 -> ZLIB, 1 -> ZSTD, 2 -> LZ4 <0>? ",resp
+			if resp="" s resp=0 quit
+			if resp>=0,resp<=2 quit
+			w "   please enter 0, 1 or 2."
+		}
+		s MirrorInfo("CompressionTypeForFailoverMembers")=+resp
+	} else {
+		s MirrorInfo("CompressionTypeForFailoverMembers")=0
+	}
+	while (1) {
+		w !,"Enter compression mode for Async members."
+		//r !,"0 -> System Selected, 1 -> Uncompressed, 2 -> Compressed <0>? ",resp
+		if resp="" s resp=0 quit
+		if resp>=0,resp<=2 quit
+		w "   please enter 0, 1 or 2."
+	}
+	s MirrorInfo("CompressionForAsyncMembers")=+resp
+	if +resp=2 {
+		while (1) {
+			w !,"Enter compression type."
+			r !,"0 -> ZLIB, 1 -> ZSTD, 2 -> LZ4 <0>? ",resp
+			if resp="" s resp=0 quit
+			if resp>=0,resp<=2 quit
+			w "   please enter 0, 1 or 2."
+		}
+		s MirrorInfo("CompressionTypeForAsyncMembers")=+resp
+	} else {
+		s MirrorInfo("CompressionTypeForAsyncMembers")=0
+	}
+	while (1) {
+		w !,"Enter 'Allow Parallel Dejournaling' setting."
+		//r !,"0 -> Failover Members and DR, 1 -> Failover Members Only, 2 -> All Members<0>? ",resp
+		if resp="" s resp=0 quit
+		if resp>=0,resp<=2 quit
+		w "   please enter 0, 1 or 2."
+	}
+	s MirrorInfo("AllowParallelDejournaling")=+resp
+	s SystemName=$$GetLocalMirrorInfo(.MirrorInfo,1)
+	//w !,"Are you sure you want to create Mirror Set '",mirname,"'? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+	quit:'resp
+	s rc=##class(SYS.Mirror).CreateNewMirrorSet(mirname,SystemName,.MirrorInfo)
+	i ('rc) {
+		w !,"Failed to create new mirror set '",mirname,"'."
+		w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"Mirror set '",mirname,"' successfully created!"
+	}
+	quit
+retrieve ;
+ 	while (1) {
+	 	set ipToUse=""
+	 	if Type=4 {
+		 	w !,"Network address of Super Server of the async member? "
+	 	} else {
+		 	w !,"Network address of agent job of ",$s(Type=3:"failover",1:"primary")," member? "
+	 	}
+	 	r ipaddr
+		if '##class(SYS.MirrorConfiguration).IsIPFormatValid(ipaddr,.type) {  ;Allow hostname 
+			write !,?5,"Invalid IP address entered."
+			continue	
+		}
+		if type="HOST" {
+			set ipToUse=$$convHostToIP(ipaddr)
+			if ipToUse="" {
+				write !,?5,"Could not resolve host "_ipaddr_" to IP address."
+				continue
+			}
+		}
+		else {
+			set ipToUse=ipaddr	
+		}
+		if '$System.INetInfo.CheckAddressExist(ipToUse) {
+			write !,?5,"IP address ("_ipToUse_") is not reachable from this machine."
+			continue	
+		} 
+		quit
+ 	}
+ 	set ipaddr=ipToUse
+ 	if Type=4 {
+	 	w !,"Port of Super Server of the async member? <",1972,"> "
+ 	} else {
+	 	w !,"Port of agent job of ",$s(Type=3:"failover",1:"primary")," member? <",2188,"> "
+ 	}
+ 	r port
+	if port="" s port=$s(Type=4:1972,1:2188)
+	if Type=4 {
+		s mirname=##class(Config.Mirrors).GetMirrorName()
+		if mirname="" {
+			w !,"No mirror defined, can't add new async member."
+			quit
+		}
+		s rc=$$GetMemberConfigData^MIRRORCTL(mirname,ipaddr_"|"_port,"","","**")
+		if '+$LG(rc) {
+			w !,"Failed to retrieve member's information. Error=",$LG(rc,2)
+			quit
+		}
+		s info=$LG(rc,3)  ;list of $LIST(name,<list of key/value pairs>)
+		if info="" w !,"Remote member does not exist or is not an async member." q
+		s MapMirrors("Name")=$LG(info,1)
+		s data=$lg(info,2)
+		s len=$LL(data)
+		for i=1:1:len {
+			s item=$LG(data,i)
+			s p=$LG(item,1)
+			s v=$LG(item,2)
+			s MapMirrors(p)=v
+		}
+		m params=MapMirrors
+		s params("MemberType")=$case(MapMirrors("MemberType"),0:"Failover",1:"Relay",2:"Async",:"Unknown")
+		; We want the ECPAddress property called SuperServer Address
+		s params("SuperServerAddress")=$G(params("ECPAddress"))
+		k params("ECPAddress")
+		k params("PreferredArbiter")
+		k params("ConnectsTo")
+		w !!,"Properties for member '",MapMirrors("Name"),"':"
+		do dumpparams(.params)
+		w !
+		/*
+		i $$YN("Are you sure you want to add this new async member '"_MapMirrors("Name")_"'","N")="N" {
+			w !,"Aborted" 
+			q
+		}
+		*/
+		s rc=##class(Config.MapMirrors).Create(mirname,MapMirrors("Name"),.MapMirrors)
+		if ('rc) {
+			w !,"Failed to add new member '",MapMirrors("Name"),"'. Error=",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"New member '",MapMirrors("Name"),"' is added."
+			d ##class(SYS.Mirror).RemoveFromApprovalList(MapMirrors("Name"),MapMirrors("GUID"))
+		}
+		q
+	}
+	w !,"Instance name of the ",$s(Type=3:"failover",1:"primary")," member? " r InstanceName
+	s InstanceName=$zcvt(InstanceName,"U")
+	if Type=3 {
+		s rc=##class(SYS.Mirror).AddFailoverMember(,InstanceName,ipaddr,port)
+		i ('rc) {
+			w !,"Failed to add failover member. Error: ",$SYSTEM.Status.GetErrorText(rc)
+		} else {
+			w !,"Add failover member succeeded!"
+		}
+		quit
+	}
+	Set tObj = ##class(SYS.MirrorConfiguration).RetrieveMirrorConfig(mirname, ipaddr, port, InstanceName, .status)
+	if ('status) {
+		w !,"Failed to contact the primary member. Error:",$SYSTEM.Status.GetErrorText(status)
+		quit
+	}
+	;AsyncMemberType and SystemName are filled in by GetLocalConfigInfo()
+	;GetLocalConfigInfo() may also change the sslconfigured value and adds the local
+	; system info to the MirrorInfo() array.
+	; AsyncMemberType is also passed as input to indicate whether this system is already
+	;   an async member or not (GetLocalConfigInfo wants to ask what kind of member this should be)
+	s AsyncMemberType=$SYSTEM.Mirror.AsyncMemberType()
+	s primaryInfo=$LB(ipaddr, port, InstanceName)
+	s ok=$$GetLocalConfigInfo(Type,tObj,primaryInfo,.sslconfigured,.SystemName,.MirrorInfo,.AsyncMemberType)
+	if 'ok quit
+	w !,"Are you sure you want to join Mirror Set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," member? <Y> " r resp
+	s resp=$S("Nn"[$E(resp_"Y"):0,1:1)
+	quit:'resp
+	if Type=1 {
+		s rc=##class(SYS.Mirror).JoinMirrorAsFailoverMember(mirname,SystemName,InstanceName,ipaddr,port,.MirrorInfo)
+	} else {
+		s rc=##class(SYS.Mirror).JoinMirrorAsAsyncMember(mirname,SystemName,InstanceName,ipaddr,port,AsyncMemberType,.MirrorInfo)
+	}
+	i ('rc) {
+		w !,"Failed to join mirror set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," member."
+		w !," Error:",$SYSTEM.Status.GetErrorText(rc)
+	} else {
+		w !,"Joining Mirror set '",mirname,"' as ",$s(Type=1:"failover",1:"async")," succeeded!"
+	}
+	if tObj.UseSSL&&(Type=1)&&('('rc)) w !,"Don't forget to authorize this node to join the configuration on the primary member."
+	quit
+err ;
+	s $zt=""
+	w !,"Unexpected error: ",$ze
+	quit 0
+}
+GetLocalConfigInfo(Type,tObj,primaryInfo,sslconfigured,SystemName,MirrorInfo,AsyncMemberType) {
+    ;sslconfigured, MirrorInfo are input/output variables passed by reference 
+    ;SystemName is an output variable passed by reference
+    ;AsyncMemberType (passed by ref) is 0 if the system is not currently an async member and
+    ;      will be set on output. If non-zero, the system is currently an async member
+    ;tObj is a Config.Mirrors object
+    ;Type is the argument to SetupMirror()
+    ;    ;
+    ; Returns: 0 - abort, 1 - continue
+    ;
+	s ipaddr=$LG(primaryInfo,1)
+	s port=$LG(primaryInfo,2)
+	s InstanceName=$LG(primaryInfo,3)
+	if tObj.UseSSL {
+		if 'sslconfigured {
+			w !,"The primary member has UseSSL set, so you need to setup Mirror SSL configuration"
+			w !,"before you could join the mirror set."
+			w !,"Setting up the Mirror SSL configuration now:"
+			if '$$SetupSSL() w !,"Mirror SSL configuration must be setup before the mirror configuration is setup." Quit
+			s sslconfigured=1
+		}
+		w !
+		w !,"After adding this instance you need to authorize it as a mirror member"
+		w !,"on the primary. Pending authorizations are managed using the Edit Mirror"
+		w !,"page or using the ^MIRROR Mirror Configuration->Authorize/reject pending"
+		w !,"new members option"
+		w !
+	}
+	if Type=2 {
+		s MirrorInfo("EncryptCommunication")=0
+		if 'AsyncMemberType {
+			s resp=-1
+			while (resp'?1N||(resp<0||(resp>2))) {
+				w !!,"0 - Disaster Recovery.",!,"1 - Read-Only Reporting.",!,"2 - Read-Write Reporting."
+				r !!,"Enter Async Member Type <0>: ",resp
+				s:resp="" resp=0
+				if resp=0,'(''##class(SYS.Mirror).CheckISCAgent()) {
+					w !,"ISCAgent is not running, DR is not allowed to join."
+					s resp=-1
+				}
+			}
+			s AsyncMemberType=resp
+		} else {
+			s AsyncMemberType=1
+		}
+		s SystemName=$$GetLocalMirrorInfo(.MirrorInfo,AsyncMemberType=0)
+	} else {
+		s SystemName=$$GetLocalMirrorInfo(.MirrorInfo,1)
+	}
+	if tObj.VirtualAddress'=""&&(Type=1||(AsyncMemberType=0)) {
+		s VIPInterface=$$getVirtualAddressInterface(tObj.VirtualAddress)
+		if VIPInterface=""&&(Type=1) quit 0
+		s MirrorInfo("VirtualAddressInterface")=VIPInterface
+	}
+	if tObj.UseSSL {
+		s RetrieveInfo=$LB(SystemName,+$G(AsyncMemberType)'=0,InstanceName,ipaddr,port)
+		s mirname=tObj.Name
+		w !!,"Verifying Mirror SSL Certificates..."
+		s rc=##class(SYS.MirrorConfiguration).VerifyMirrorSSLCertificates(mirname,0,RetrieveInfo)
+		if '(''rc) {
+			w !,"Mirror SSL certificates verification returned the following errors:",!
+			d $SYSTEM.Status.DisplayError(rc)
+			w !
+		}
+	}
+	quit 1
+}
+GetLocalSystemName() {
+	s ourname=""
+	s defaultname=##class(SYS.MirrorConfiguration).DefaultSystemName()
+	k MemberNames
+	s mirnames=$p($G(^SYS("MIRRORSET")),"^",2)
+	if mirnames'="" {
+		for i=1:1:$L(mirnames,",") {
+			s mirname=$P(mirnames,",",i)
+			s syscnt=+$G(^SYS("MIRRORSET",mirname,"Member"))
+			f j=0:1:syscnt {
+				s name=$LG(^SYS("MIRRORSET",mirname,"Member",j))
+				s MemberNames(name)=1
+			}
+		}
+	}
+	if defaultname'="",$G(MemberNames(defaultname))=1 s defaultname=""
+	do {
+		w !,"Our mirror member name: <",defaultname,"> "
+		r ourname s:ourname="" ourname=defaultname
+		if ourname="" {
+			w !,"Mirror member name can not be null."
+		} else {
+			s rc=##class(Config.MirrorMember).ValidateMemberName(ourname)
+			if '(''rc)	{
+			   w !,$SYSTEM.Status.GetErrorText(rc)
+			   s ourname=""
+			}
+			s ourname=$zcvt(ourname,"U")
+			if $G(MemberNames(ourname))=1 {
+				w !,ourname," is in use by another mirror member."
+				s ourname=""
+			}
+		}
+	} while ourname=""
+	quit ourname
+}
+GetLocalMirrorInfo(MirrorInfo,AskAgent=0) {
+	s ourname=""
+	if '##class(Config.MirrorMember).isAsyncMember() {
+	 	s ourname=$$GetLocalSystemName()
+	}
+ 	while (1) {
+	 	s defaultaddr=$System.INetInfo.LocalHostName()
+ 		w !,"Mirror Private address of local member: <",defaultaddr,"> "
+ 		r resp
+ 		if resp="" { 
+ 			s resp=defaultaddr
+ 			quit
+ 		}
+ 		else {
+		 	if '##class(SYS.MirrorConfiguration).IsIPFormatValid(resp,.type) { ;Allow hostname 
+			 	write !,type
+			 	continue
+		 	}
+		 	if type="HOST" {
+			 	set ipToUse=$$convHostToIP(resp)
+			 	if (ipToUse="") {
+				 	write !,"Error: Host ",resp," does not resolve to IP address"
+				 	continue	
+			 	}
+		 	}
+		 	else {
+			 	set ipToUse=resp	
+		 	}
+		 	if '$System.INetInfo.CheckAddressExist(ipToUse) {
+				write !,"IP address does not exist. Cannot use it as the Mirror Private address"
+			 	continue	
+		 	}
+ 		}
+ 		quit
+ 	}
+ 	s ssaddr=resp
+ 	while (1) {
+		w !,"SuperServer Address: <",ssaddr,"> "
+ 		r resp
+ 		if resp="" {
+	 		s resp=ssaddr
+	 		quit
+ 		}
+ 		else {
+	 		if '##class(SYS.MirrorConfiguration).IsIPFormatValid(resp,.type) { ;Allow hostname
+		 		write !,type
+		 		continue	
+	 		}	
+	 		if type="HOST" {
+		 		set ipToUse=$$convHostToIP(resp)
+		 		if (ipToUse="") {
+			 		write !,"Error: Host ",resp," does not resolve to IP address"
+			 		continue	
+		 		}
+	 		}
+	 		else {
+		 		set ipToUse=resp	
+	 		}
+	 		if '$System.INetInfo.CheckAddressExist(ipToUse) {
+		 		write !,"IP address does not exist. Cannot use it the SuperServer address"
+		 		continue	
+	 		}
+ 		}
+ 		quit
+ 	}
+ 	s ecpaddr=resp
+ 	if AskAgent {
+	 	s agentaddr=##class(SYS.Agent).GetApplicationInterface()
+	 	s:agentaddr=""||(agentaddr="*") agentaddr=ecpaddr
+	 	while (1) {
+			w !,"Agent Address: <",agentaddr,"> "
+	 		r resp
+	 		if resp="" {
+		 		s resp=agentaddr
+		 		quit
+	 		}
+	 		else {
+		 		if '##class(SYS.MirrorConfiguration).IsIPFormatValid(resp,.type) { ;Allow hostname
+			 		write !,type
+			 		continue	
+		 		}	
+		 		if type="HOST" {
+			 		set ipToUse=$$convHostToIP(resp)
+			 		if (ipToUse="") {
+				 		write !,"Error: Host ",resp," does not resolve to IP address"
+				 		continue	
+			 		}
+		 		}
+		 		else {
+			 		set ipToUse=resp	
+		 		}
+		 		if '$System.INetInfo.CheckAddressExist(ipToUse) {
+			 		write !,"IP address does not exist. Cannot use it the Agent address"
+			 		continue	
+		 		}
+	 		}
+	 		quit
+	 	}
+	 	s MirrorInfo("AgentAddress")=resp
+ 	}
+ 	s MirrorInfo("ECPAddress")=ecpaddr
+ 	s MirrorInfo("MirrorAddress")=ssaddr
+ 	quit ourname
+}
+GetOS() {
+	q:$System.Version.GetOS()'="UNIX" ""
+	s dev="uname -s" o dev:"QR" u dev r os c dev
+	quit os
+}
+getVirtualAddressInterface(mirrorVIP) {
+	s os=$$GetOS(),hpsun=((",HP-UX,")[(","_os_","))
+	if '$SYSTEM.INetInfo.CheckArpingInstalled() {
+		w !!,"The 'arping' command is not installed in the system, please install"
+		w !,"iputils-arping package in the Linux system before yoo can configure"
+		w !,"Virtual IP address for mirroring. The 'arping' command is needed to"
+		w !,"inform routers outside the sub-net so they can recognize this new"
+		w !,"IP address",!
+		Quit ""
+	}
+	while (1) {
+		;This will eventually get replaced by code that provides a list of interfaces...
+		k viarray
+ 		Set tList = ##class(%SYSTEM.INetInfo).GetListOfConfiguredInterfaces(0,mirrorVIP)
+ 		if tList="" {
+	 		w !!,"There is no installed interface with matched subnet for '",mirrorVIP,"'."
+	 		w !,"Please check if the virtual IP address and subnet mask is correct.",!
+	 		s iVirt=""
+	 		quit
+ 		}
+ 		Set tItem = 1
+ 		w !
+ 		While $lg(tList,tItem) '= "" {
+ 			Set value = $lg($lg(tList,tItem),1)
+ 			w !,tItem,") ",value s viarray(tItem)=value
+ 			Set tItem = tItem + 1
+ 		}
+ 		w !,tItem,") Abort." s viarray(tItem)="Abort"
+		w !!
+		r "Select Network interface for Mirror Virtual Network address: ",iVirt
+		if iVirt="" {
+			continue
+		} elseif iVirt?.N {
+			if $G(viarray(iVirt))="" {
+	 			write !,"Select item 1 to ",tItem
+	 			continue
+			}
+			s iVirt=viarray(iVirt)
+		} Else {
+			s iv=$p(iVirt,":"),found=0
+			f i=1:1:tItem i viarray(i)=iv s found=1 q
+			if 'found {
+				w !,"Interface '",iv,"' not found."
+				continue
+			}
+		}
+		if iVirt="Abort" s iVirt="" quit
+		i hpsun {
+idxnum		r !,"logical index number :",idxnum
+			if idxnum'?.N w !,"Must be a integer value" g idxnum
+			s iVirt=iVirt_":"_idxnum
+		}
+		if os]"" { ;This is some form of UNIX/Linux 
+			s ifaceExists=$System.INetInfo.CheckInterfaceExist(iVirt,1) ;Ask for exact match for the interface - don't strip out the virtual part...
+			if ($e(iVirt,1,2)="lo") {  ;On UNIX platforms, interfaces that start with lo are *typically* loopback interfaces. We don't want these...
+				write !,"This interface appears to be a loopback interface."
+				write !,"Please enter an appropriate non-loopback interface."
+				continue	 				
+			}
+	 		if hpsun { ;For HP-UX and SunOS platforms, we require virtual (logical) interfaces, so we have to check to see if the base (physical) one exists...
+		 		if ifaceExists {
+		 			write !,?5,"This platform requires a virtual (logical) interface."
+		 			write !,?5,"The interface you entered ("_iVirt_") already exists."
+		 			write !,?5,"Please enter an appropriate logical interface that does not already exist (it"
+		 			write !,?5,"will be created when assigning the Virtual IP"
+		 			continue
+		 		}
+		 		if $p(iVirt,":",2)="" {
+			 		write !,?5,"Please enter an appropriate logical interface that does not already exist (it"
+			 		write !,?5,"will be created when assigining the Virtual IP"
+			 		continue
+		 		}
+			 	if '$System.INetInfo.CheckInterfaceExist($p(iVirt,":")) {
+					write !,?5,"Physical interface ("_$p(iVirt,":")_") does not exist."
+					write !,?5,"The base physical interface must exist for a virtual interface"
+					write !,?5,"to be added on."
+					continue	
+			 	}
+			} else { ;Non HP-UX, non SunOS platforms, so the entered interface must already exist for it to be selected
+				if 'ifaceExists {
+			 		write !,?5,"This platform requires a physical interface, and it must already"
+			 		write !,?5,"exists. The interface you entered ("_iVirt_") does not exist."
+					continue 
+				}
+		 	}
+		} else {
+		 	if '$System.INetInfo.CheckInterfaceExist(iVirt) {
+		 		w !,"Interface does not exist."
+		 		continue
+			}
+		}
+		quit	
+	}
+	quit iVirt
+}
+DeleteLocalConfig() {
+	s $zt="err"
+	w !!,"Do you also want to remove mirror attribute of"
+	w !,"mirrored databases (the databases themselves will not be deleted)? <No> "
+	r resp
+	if "Yy"[$E(resp_"n") {
+		s deleteDBs=1
+		w !,"The mirrored databases' mirror attribute will be removed."
+	} else { 
+		s deleteDBs=0
+		w !,"The mirrored databases' mirror attribute will not be removed."
+	}
+	s deleteJournals=1
+	;	
+	; Get a list of the mirrors in mirrorList()
+ 	Set rs=##class(%Library.ResultSet).%New("Config.Mirrors:List")
+ 	s rc=rs.Execute()
+ 	if rc {
+ 	   While (rs.Next()) {
+	      s mirname=rs.Data("Name")
+		  s mirrorList(mirname)=""
+		}
+ 	}
+	s rs=""
+	s mirname=$O(mirrorList(""))
+	if mirname="" {
+		w !,"No mirrors found in configuration to remove"
+		quit 1  ;I guess this is ok
+	}
+	while (mirname'="") {
+		s status=##class(SYS.MirrorConfiguration).RemoveLocalMirrorConfiguration(mirname,deleteDBs,deleteJournals)
+		if ('status) {
+			s msg="Failed to remove the local mirror configuration for "_mirname
+			s msg=msg_": "_$System.Status.GetErrorText(status)
+			w !,msg
+			do $ZU(9,"",msg)  ;record this in the message log
+		}
+		s mirname=$O(mirrorList(mirname))
+	}
+	s mm=##class(Config.MirrorMember).Open()
+	if $IsObject(mm) {
+		k ^SYS("MirrorVersion")
+		k ^SYS("FirstMirrorStartSinceInstall")
+		s mm.AsyncMemberGUID=""
+		s mm.JoinMirror=0
+		s mm.SystemName=""
+		s mm.ValidatedMember=0
+		s mm.VirtualAddressInterface = ""
+		s mm.AsyncMemberType = 0
+		s mm.AsyncUseSystemPurgeInterval = 0
+		s rc=mm.%Save()
+		s mm=""
+		if ('rc) {
+			s msg="Error clearing MirrorMember setting: "_$System.Status.GetErrorText(rc)
+			w !,msg
+			do $ZU(9,"",msg)
+		}
+	}
+	; Config.Mirrors.Delete() kills ^SYS("MIRRORSET",mirname) but
+	;   does not always reset all of ^SYS("MIRRORSET")
+	k ^SYS("MIRRORSET") 
+	s rc=$SYSTEM.Mirror.Clear()  ;remove mirror config from memory
+	;
+	w !,"Done"  ;let them know we succeeded
+	quit 1
+err ;
+	s $zt=""
+	if $tlevel trollback
+	if $ZE["<INTERRUPT>" {
+		w !,"Aborted."
+		quit 0
+	}
+	d BACK^%ETN
+	w !,"Unexpected error logged: ",$ZE
+	quit 0
+}
+SetupSSL() {
+ s SSLConfig=##class(Security.SSLConfigs).%New()
+ s SSLConfig.Protocols=$zb(SSLConfig.Protocols,1,2)
+ /*
+ i $$YN("Allow SSLv3 protocol",$case($zb(SSLConfig.Protocols,2,1),2:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,2,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,2,2)
+ }
+ i $$YN("Allow TLSv1 protocol",$case($zb(SSLConfig.Protocols,4,1),4:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,4,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,4,2)
+ }
+ i $$YN("Allow TLSv1.1 protocol",$case($zb(SSLConfig.Protocols,8,1),8:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,8,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,8,2)
+ }
+ i $$YN("Allow TLSv1.2 protocol",$case($zb(SSLConfig.Protocols,16,1),16:"Y",:"N"))="Y" {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,16,7)
+ } else {
+ 	s SSLConfig.Protocols=$zb(SSLConfig.Protocols,16,2)
+ }
+ */
+ s SSLInfo("Protocols")=SSLConfig.Protocols
+CypherList
+ s SSLConfig.CipherList=$$STRINGOPTION("Enabled ciphersuites",SSLConfig.CipherList,1) q:SSLConfig.CipherList=-1 0
+ s SSLInfo("CipherList")=SSLConfig.CipherList
+CertificateFile
+ s SSLConfig.CertificateFile=$$STRINGOPTION("File containing this configuration's X.509 certificate",SSLConfig.CertificateFile,0) q:SSLConfig.CertificateFile=-1 0
+ s SSLInfo("CertificateFile")=SSLConfig.CertificateFile
+PrivateKeyFile
+ s SSLConfig.PrivateKeyFile=$$STRINGOPTION("File containing this configuration's private key",SSLConfig.PrivateKeyFile,0) q:SSLConfig.PrivateKeyFile=-1 0
+ s SSLInfo("PrivateKeyFile")=SSLConfig.PrivateKeyFile
+PrivateKeyType
+ w !
+ w !,"   Key Type"
+ w !,"   --------"
+ w !,"1) DSA"
+ w !,"2) RSA"
+ w !
+ s Option=$$NUMOPTION("Private key type",SSLConfig.PrivateKeyType,1,2)
+ i Option=0 q 0
+ i Option=1 s SSLConfig.PrivateKeyType=1
+ i Option=2 s SSLConfig.PrivateKeyType=2
+ s SSLInfo("PrivateKeyType")=SSLConfig.PrivateKeyType
+PrivateKeyPassword
+ s oPassword=SSLConfig.PrivateKeyPasswordLogicalToDisplay(SSLConfig.PrivateKeyPassword)
+ u:$zu(96,14)=1 $io:(:"S")
+ s Password=$$STRINGOPTION("Private key password",oPassword,1) 
+ u:$zu(96,14)=1 $io:(:"-S") 
+ q:Password=-1 0
+ i (Password'=oPassword) {
+	u:$zu(96,14)=1 $io:(:"S")
+	s cPassword=$$STRINGOPTION("Please enter the password again","",1) 
+	u:$zu(96,14)=1 $io:(:"-S") 
+	q:cPassword=-1 0
+	i cPassword'=Password w !,"Password does not match, please re-enter" g PrivateKeyPassword
+	s SSLConfig.PrivateKeyPassword=Password
+ }
+ s SSLInfo("PrivateKeyPassword")=SSLConfig.PrivateKeyPassword
+CAFile
+ s SSLConfig.CAFile=$$STRINGOPTION("Trusted Certificate Authority X.509 certificate(s)",SSLConfig.CAFile,0) q:SSLConfig.CAFile=-1 0
+ s SSLInfo("CAFile")=SSLConfig.CAFile
+CRLFile
+ k SSLConfig
+ s rc=##class(SYS.Mirror).UpdateMirrorSSL(.SSLInfo)
+ i ('rc) w !,"Failed to create Mirror SSL configuration. Error: ",$SYSTEM.Status.GetErrorText(rc) quit 0
+ w !,"%MirrorClient and %MirrorServer SSL configuration successfully created."
+ quit 1
+}
+NUMOPTION(prompt,default,min,max) [] PRIVATE {
+ s $zt="NUMOPTIONE"
+NUMOPTION1 w !,prompt_"? "_default_" => "
+ r Option i Option="" q default
+ i '(Option?1.5N)!(Option<min)!(Option>max) w !!,"Please enter a number between "_min_" and "_max,! g NUMOPTION1
+ q +Option
+NUMOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+STRINGOPTION(prompt,default,allownull) [] PRIVATE {
+ s $zt="STRINGOPTIONE"
+STRINGOPTION1 w !,prompt_"? " i default'="" w default_" => "
+ r Option i Option="",(default'="") q default
+ i Option="",(allownull=0) w !,"Please enter a non-null value" g STRINGOPTION1 
+ q Option
+STRINGOPTIONE s $zt=""
+ i $ze'["<INTERRUPT>" w !,"ERROR: "_$ZE
+ q -1
+}
+dumpparams(params) {
+	s maxlen=32  ;we'd like 32 but if there's a longer field, we'll
+	             ;adjust this up.
+	s i=""
+	for  s i=$O(params(i)) quit:i=""  if $L(i)>maxlen s maxlen=$L(i)
+	;
+	s i=$O(params(""),1,v)
+	while (i'="") {
+		w !,?5,$J(i,maxlen)," = "
+		if $ISVALIDNUM(v) {
+			w v
+		} else {
+			w """",v,""""
+		}
+		s i=$O(params(i),1,v)
+	}
+}
+convHostToIP(host) {
+	if $zcvt(host,"U")=$zcvt($zu(54,0),"U") s host="localhost"  ;force to localhost to get loopback address if the machine name is passed in
+	quit $s($zbitget($zversion(0)_$c(0,0,0,0),42):$SYSTEM.INetInfo.HostNameToAddr(host),1:$p($zu(54,13,host),","))	
+}
+convHostfileToIP(host) {
+	; Hostfile contains "169.254.172.2 10.123.45.67"
+	if ($extract(host,1,14) = "169.254.172.2 ") set ip = $piece(host," ",2)
+	quit $get(ip)
+}
+RemoveMirrorfile() PUBLIC {
+	Set mirrorfile = "/ICS/mirror/mirrorfile"
+	Set rm = "rm -rf "_mirrorfile
+	Write rm,!
+	Set rc = $ZF(-1,rm)
+	Write "rc = ",rc,!
+	Quit
+}
+mirrorcreatorput(host) PUBLIC {
+	set creatorfile = "/ICS/mirror/creator"
+	set timeout = 2
+	open creatorfile:("WNS"):timeout  // create new file or overwrite existing
+	use creatorfile
+	write $get(host),!
+	close creatorfile
+	quit 1
+}
+mirrorcreatorget() PUBLIC {
+	set creatorfile = "/ICS/mirror/creator"
+	set timeout = 2
+	open creatorfile:("R"):timeout  // read
+	if $test {
+		use creatorfile
+		read host
+		close creatorfile
+	}
+	quit $get(host)
+}
+mirrorcreatorportget() PUBLIC {
+	set creatorfile = "/ICS/mirror/creatorport"
+	set timeout = 2
+	open creatorfile:("R"):timeout  // read
+	if $test {
+		use creatorfile
+		read port
+		close creatorfile
+	}
+	quit $get(port,2188)
+}
+arbiterput(host) PUBLIC {
+	set arbiterfile = "/ICS/mirror/arbiter"
+	set timeout = 2
+	open arbiterfile:("WNS"):timeout  // create new file or overwrite existing
+	use arbiterfile
+	write $get(host),!
+	close arbiterfile
+	quit 1
+}
+arbiterget() PUBLIC {
+	set arbiterfile = "/ICS/mirror/arbiter"
+	set timeout = 2
+	open arbiterfile:("R"):timeout  // read
+	if $test {
+		use arbiterfile
+		read host
+		close arbiterfile
+	}
+	quit $get(host)
+}
+arbitergetIP() PUBLIC {
+	set host = $$arbiterget^ZMIRRORHLPR()
+	set ipToUse=$$convHostfileToIP(host)
+	quit $get(ipToUse)
+}
+primaryget() PUBLIC {
+	set primaryfile = "/ICS/mirror/primary"
+	set timeout = 2
+	open primaryfile:("R"):timeout  // read
+	if $test {
+		use primaryfile
+		read host
+		close primaryfile
+	}
+	quit $get(host)
+}
+zstulog(msg) PUBLIC {
+	write msg,!
+	set zstu = $Get(^TESTzstu)
+	if (zstu = "") quit 0
+	set ^TESTzstu(zstu,$I(^TESTzstu(zstu,0))) = msg
+	quit ^TESTzstu(zstu,0)
+}
